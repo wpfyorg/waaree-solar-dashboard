@@ -10,7 +10,9 @@ import {
   localHHMM,
   mergeRecords,
   overlayStick,
+  parseLink,
   parseRecord,
+  storeLink,
   type StickRecord,
 } from "../src/stick";
 
@@ -143,7 +145,7 @@ describe("WAAREE link", () => {
     expect(await loadLink(env(kv))).toBeNull();
     expect(await (await post(kv, { records: [], link: { mode: "down", since } })).json()).toMatchObject({ link_changed: true });
     expect(kv.puts).toBe(1);
-    expect(await loadLink(env(kv))).toEqual({ mode: "down", since: "2026-10-07T18:31:40Z" });
+    expect(await loadLink(env(kv))).toMatchObject({ mode: "down", since: "2026-10-07T18:31:40Z" });
     expect(await (await post(kv, { records: [], link: { mode: "down", since: since + 60 } })).json()).toMatchObject({ link_changed: false });
     expect(kv.puts).toBe(1);
     await post(kv, { records: [], link: { mode: "relaying", since: since + 120 } });
@@ -151,8 +153,24 @@ describe("WAAREE link", () => {
     expect(kv.puts).toBe(2);
   });
 
-  it("ignores junk", async () => {
+  it("refreshes last-seen at most every 20 minutes", async () => {
     const kv = new FakeKV();
+    const link = (at: number) => parseLink({ mode: "relaying", since }, at)!;
+    expect(await storeLink(env(kv), link(since))).toBe(true);
+    expect(kv.puts).toBe(1);
+    expect((await loadLink(env(kv)))!.seen).toBe("2026-10-07T18:31:40Z");
+    // Same mode, recent last-seen: a heartbeat must not write.
+    expect(await storeLink(env(kv), link(since + 19 * 60))).toBe(false);
+    expect(kv.puts).toBe(1);
+    expect(await storeLink(env(kv), link(since + 20 * 60))).toBe(true);
+    expect(kv.puts).toBe(2);
+    expect((await loadLink(env(kv)))!.seen).toBe("2026-10-07T18:51:40Z");
+  });
+
+  it("ignores a stored link without last-seen and junk from a gateway", async () => {
+    const kv = new FakeKV();
+    kv.store.set("stick_link", JSON.stringify({ mode: "relaying", since: "2026-10-07T18:31:40Z" }));
+    expect(await loadLink(env(kv))).toBeNull();
     await post(kv, { records: [], link: { mode: "weird", since } });
     await post(kv, { records: [], link: "x" });
     expect(kv.puts).toBe(0);

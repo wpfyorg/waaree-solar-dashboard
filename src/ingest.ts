@@ -42,7 +42,7 @@ export async function handleIngest(req: Request, env: Env): Promise<Response> {
     if (r) recs.push(r);
   }
   const added = await storeRecords(env, recs);
-  const link = parseLink((body as { link?: unknown }).link);
+  const link = parseLink((body as { link?: unknown }).link, now);
   const linkChanged = link ? await storeLink(env, link) : false;
   return json({ ok: true, received: list.length, valid: recs.length, added, link_changed: linkChanged });
 }
