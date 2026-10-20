@@ -17,6 +17,14 @@ struct Args {
     config: String,
 }
 
+/// Unix seconds, for the `since` on a link mode the gateway starts in.
+fn unix_now() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as u32)
+        .unwrap_or(0)
+}
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args: Args = argh::from_env();
@@ -43,7 +51,9 @@ fn main() {
             let pin = (!cfg.relay.pin_sha256.is_empty()).then(|| cfg.relay.pin_sha256.clone());
             Box::new(TlsUpstream { addr: cfg.relay.upstream.clone(), timeout: Duration::from_secs(cfg.relay.connect_timeout_s), pin }) as Box<dyn Upstream>
         }),
-        link: Mutex::new((if cfg.relay.enabled { Link::Unknown } else { Link::Off }, 0)),
+        // The Worker rejects a `since` before 2020, so a relay-off gateway
+        // must report a real time or the last mode it saw would stick.
+        link: Mutex::new(if cfg.relay.enabled { (Link::Unknown, 0) } else { (Link::Off, unix_now()) }),
         reply_timeout: Duration::from_secs(cfg.relay.reply_timeout_s),
         started: tokio::time::Instant::now(),
     });
@@ -67,7 +77,10 @@ fn main() {
                 if n > 0 {
                     log::info!("pushed {n} records");
                     pushed_link = Some(link);
-                } else if changed && push_status(&c, now) {
+                } else if push_status(&c, now) {
+                    // An empty round still reports the link. The Worker uses
+                    // the arrival time to age it out, so this has to be a
+                    // heartbeat, not only a change notification.
                     pushed_link = Some(link);
                 }
             }

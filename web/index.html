@@ -1572,16 +1572,28 @@ function renderSystem(isNight) {
   }
 }
 
-// Quiet note on whether the stick still relays to WAAREE's cloud.
+// Quiet note on whether the stick still relays to WAAREE's cloud. `seen` is
+// when the gateway last pushed, so a long silence means the mode is history,
+// not a current claim. The Worker refreshes it at most every 20 minutes.
+const LINK_STALE_SEC = 60 * 60;
 function waareeLinkLine(link) {
-  if (!link) return '';
+  if (!link || !link.seen) return '';
+  const seen = new Date(link.seen).getTime();
+  if (isNaN(seen)) return '';
+  const now = state && state.server_now ? new Date(state.server_now).getTime() : Date.now();
+  const silence = Math.max(0, (now - seen) / 1000);
   let text = '';
-  if (link.mode === 'relaying') text = 'waaree cloud: connected, relaying your data';
+  if (silence > LINK_STALE_SEC) {
+    const age = silence < 2 * 3600 ? `${Math.round(silence / 60)} min`
+      : silence < 2 * 86400 ? `${Math.round(silence / 3600)} hours`
+      : `${Math.round(silence / 86400)} days`;
+    text = `waaree cloud: no word from the relay for ${age}`;
+  } else if (link.mode === 'relaying') text = 'waaree cloud: connected, relaying your data';
   else if (link.mode === 'off') text = 'waaree cloud: relay off';
   else if (link.mode === 'down') {
     const t = link.since ? new Date(link.since).getTime() : NaN;
     const when = isNaN(t) ? '' : ` since ${(() => { const i = new Date(t + 330 * 60000); return `${i.getUTCDate()} ${MONTH_FULL[i.getUTCMonth()]}`; })()}`;
-    text = `waaree cloud: down${when}, your data stays local`;
+    text = `waaree cloud: down${when}, readings not relayed`;
   }
   return text ? `<p class="sys-link">${esc(text)}</p>` : '';
 }

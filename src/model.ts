@@ -213,7 +213,11 @@ export interface LogEvent {
  * the gateway answers instead; "off": relay not configured. */
 export interface WaareeLink {
   mode: "relaying" | "down" | "off" | "unknown";
-  since: string; // RFC 3339 UTC
+  since: string; // RFC 3339 UTC of the last mode change
+  // RFC 3339 UTC of the last push from the gateway. The mode goes stale if
+  // this stops advancing (the gateway died or lost its network), so the UI
+  // only presents it as current while it is recent.
+  seen: string;
 }
 
 export interface State {

@@ -4,8 +4,9 @@
 // only solar figures are filled in.
 //
 // KV keys:
-//   stick_link        - the gateway's WAAREE link {mode, since}; written only
-//                       when the mode changes
+//   stick_link        - the gateway's WAAREE link {mode, since, seen}; written
+//                       when the mode changes, and otherwise at most once
+//                       every LINK_SEEN_REFRESH_S to keep `seen` current
 //   stick:YYYY-MM-DD  - that plant-local day's records, sorted by time. One
 //                       write per ingest per day touched; ingest never
 //                       writes `state` (poll.ts folds this in on its own
@@ -282,14 +283,20 @@ export async function overlayStick(env: Env, state: State, nowSec: number): Prom
 }
 
 const LINK_MODES = new Set(["relaying", "down", "off", "unknown"]);
+// While the gateway is alive it pushes at least once every push interval
+// (5 min), but rewriting `stick_link` on each push would burn the KV budget.
+// Refresh `seen` at most this often; it stays well inside the UI's staleness
+// window even if one refresh is missed.
+const LINK_SEEN_REFRESH_S = 20 * 60;
 
-/** Validates the `link` object a gateway push carries. */
-export function parseLink(x: unknown): WaareeLink | null {
+/** Validates the `link` object a gateway push carries. `nowSec` is when the
+ * push arrived, which becomes `seen`. */
+export function parseLink(x: unknown, nowSec: number): WaareeLink | null {
   if (!x || typeof x !== "object") return null;
   const o = x as Record<string, unknown>;
   const since = num(o.since);
   if (typeof o.mode !== "string" || !LINK_MODES.has(o.mode) || since === null || since < 1577836800) return null;
-  return { mode: o.mode as WaareeLink["mode"], since: mapping.isoFromUnix(since) };
+  return { mode: o.mode as WaareeLink["mode"], since: mapping.isoFromUnix(since), seen: mapping.isoFromUnix(nowSec) };
 }
 
 export async function loadLink(env: Env): Promise<WaareeLink | null> {
@@ -297,16 +304,20 @@ export async function loadLink(env: Env): Promise<WaareeLink | null> {
   const raw = await env.SOLAR_KV.get("stick_link");
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as WaareeLink;
+    const o = JSON.parse(raw) as Partial<WaareeLink>;
+    // A link stored before `seen` existed is not usable as a live claim.
+    if (typeof o.mode !== "string" || !LINK_MODES.has(o.mode) || typeof o.since !== "string" || typeof o.seen !== "string") return null;
+    return o as WaareeLink;
   } catch {
     return null;
   }
 }
 
-/** Stores the link only when its mode differs from the stored one. */
+/** Stores the link when its mode changes, and otherwise refreshes `seen`
+ * only once it is LINK_SEEN_REFRESH_S old. Returns true if it wrote. */
 export async function storeLink(env: Env, link: WaareeLink): Promise<boolean> {
   const have = await loadLink(env);
-  if (have && have.mode === link.mode) return false;
+  if (have && have.mode === link.mode && parseIso(link.seen) - parseIso(have.seen) < LINK_SEEN_REFRESH_S) return false;
   await env.SOLAR_KV.put("stick_link", JSON.stringify(link));
   return true;
 }
